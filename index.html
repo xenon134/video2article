@@ -423,6 +423,9 @@
     </div>
 
     <!-- ==================== APPLICATION LOGIC ==================== -->
+    <!-- Deterministic, DOM-free paragraph grouper. Served locally; the app
+         falls back to its built-in rules if this file is unavailable. -->
+    <script src="tools/grouping.js"></script>
     <script>
         /********************************************************************
          * 2. APPLICATION STATE
@@ -776,7 +779,7 @@
          * never replaces the transcript text.
          */
         function groupSegmentsIntoParagraphs(segments, sentenceEndCues = null) {
-            const grouping = window.VideoReaderGrouping;
+            const grouping = window.TranscriptGrouping || window.VideoReaderGrouping;
             if (grouping && typeof grouping.groupCues === 'function') {
                 try {
                     const result = grouping.groupCues(segments, { sentenceEndCues });
