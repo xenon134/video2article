@@ -1350,7 +1350,9 @@
                     signal: controller.signal
                 });
 
-                if (response.status === 404 || response.status === 503) {
+                if ([404, 405, 501, 503].includes(response.status)) {
+                    // Endpoint missing (old static/newer server mismatch) or
+                    // model tooling not installed; don't retry every load.
                     state.formatUnavailable = true;
                     return;
                 }
