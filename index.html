@@ -448,7 +448,10 @@
             guideVisible: true,
             fontSizeStep: 1,          // 0: SM, 1: MD, 2: LG
             theme: 'dark',            // 'dark' | 'light'
-            srtSourceVideoId: null    // video the current fetched SRT belongs to
+            srtSourceVideoId: null,   // video the current fetched SRT belongs to
+            sentenceEndCues: null,    // model-provided cue indices that end sentences
+            formatRequestId: 0,       // ignores stale /api/format responses
+            formatUnavailable: false  // stop asking after a 404/503
         };
 
         /********************************************************************
@@ -717,31 +720,13 @@
         /********************************************************************
          * 5. CONTINUOUS ARTICLE RENDERER (GROUPING SEGMENTS INTO PROSE)
          ********************************************************************/
-        function renderContinuousArticle(segments) {
-            els.articleContent.innerHTML = '';
 
-            if (!segments || segments.length === 0) {
-                els.articleContent.innerHTML = `
-                    <p class="text-muted font-mono text-sm">
-                        No transcript loaded. Use “Load Source” to add a YouTube video and an .srt file.
-                    </p>`;
-                els.articleDurationTag.classList.add('hidden');
-                els.articleMetaRow.classList.add('hidden');
-                return;
-            }
-
-            const lastEnd = segments[segments.length - 1].end;
-            state.totalDuration = lastEnd;
-            els.articleDurationTag.textContent = `DURATION ${formatSecondsToReadout(lastEnd, false).split('.')[0]}`;
-            els.articleDurationTag.classList.remove('hidden');
-            els.articleMetaRow.classList.remove('hidden');
-
-            // Group SRT segments into natural flowing paragraphs
-            // A paragraph break is triggered when:
-            // - A segment ends with sentence punctuation (. ? !) AND either:
-            //   a) The current paragraph has accumulated >= 3 segments, OR
-            //   b) There is a pause > 1.5 seconds before the next segment
-            // - Or the paragraph reaches 7 segments
+        /**
+         * Deterministic fallback grouping. This is intentionally conservative:
+         * it is used when the optional sentence-boundary model is unavailable,
+         * or when its response is not usable yet.
+         */
+        function groupSegmentsWithLegacyRules(segments) {
             const paragraphs = [];
             let currentPara = [];
 
@@ -763,6 +748,70 @@
                     currentPara = [];
                 }
             }
+            return paragraphs;
+        }
+
+        /**
+         * Normalizes either cue arrays or cue-index arrays into cue arrays.
+         */
+        function normalizeParagraphGroups(groups, segments) {
+            if (!Array.isArray(groups)) return null;
+            const byIndex = new Map(segments.map(seg => [seg.index, seg]));
+            const normalized = [];
+
+            groups.forEach((group) => {
+                if (!Array.isArray(group)) return;
+                const cues = group
+                    .map(item => (typeof item === 'number' ? byIndex.get(item) : item))
+                    .filter(item => item && typeof item.text === 'string');
+                if (cues.length > 0) normalized.push(cues);
+            });
+
+            return normalized.length > 0 ? normalized : null;
+        }
+
+        /**
+         * Uses tools/grouping.js when it is loaded, otherwise the local
+         * fallback. The optional model only supplies sentence-end hints; it
+         * never replaces the transcript text.
+         */
+        function groupSegmentsIntoParagraphs(segments, sentenceEndCues = null) {
+            const grouping = window.VideoReaderGrouping;
+            if (grouping && typeof grouping.groupCues === 'function') {
+                try {
+                    const result = grouping.groupCues(segments, { sentenceEndCues });
+                    const groups = Array.isArray(result) ? result : (result && result.paragraphs);
+                    const normalized = normalizeParagraphGroups(groups, segments);
+                    if (normalized) return normalized;
+                } catch (error) {
+                    console.warn('Paragraph grouping module failed; using fallback rules.', error);
+                }
+            }
+            return groupSegmentsWithLegacyRules(segments);
+        }
+
+        function renderContinuousArticle(segments, sentenceEndCues = null) {
+            els.articleContent.innerHTML = '';
+
+            if (!segments || segments.length === 0) {
+                els.articleContent.innerHTML = `
+                    <p class="text-muted font-mono text-sm">
+                        No transcript loaded. Use “Load Source” to add a YouTube video and an .srt file.
+                    </p>`;
+                els.articleDurationTag.classList.add('hidden');
+                els.articleMetaRow.classList.add('hidden');
+                return;
+            }
+
+            const lastEnd = segments[segments.length - 1].end;
+            state.totalDuration = lastEnd;
+            els.articleDurationTag.textContent = `DURATION ${formatSecondsToReadout(lastEnd, false).split('.')[0]}`;
+            els.articleDurationTag.classList.remove('hidden');
+            els.articleMetaRow.classList.remove('hidden');
+
+            // A model can provide sentence-end hints, but the grouping rules
+            // still belong to the client. tools/grouping.js is optional.
+            const paragraphs = groupSegmentsIntoParagraphs(segments, sentenceEndCues);
 
             // Build DOM Paragraphs with inline .srt-segment spans
             const fragment = document.createDocumentFragment();
@@ -805,6 +854,21 @@
             });
 
             els.articleContent.appendChild(fragment);
+
+            // A re-render (for example after model hints arrive) must restore
+            // the active/read-past styling without triggering another seek.
+            if (state.activeIndex >= 0) {
+                els.articleContent.querySelectorAll('.srt-segment').forEach((span) => {
+                    const index = parseInt(span.dataset.index, 10);
+                    if (index < state.activeIndex) span.classList.add('read-past');
+                });
+                const activeSpan = els.articleContent.querySelector(
+                    `.srt-segment[data-index="${state.activeIndex}"]`
+                );
+                if (activeSpan) {
+                    activeSpan.classList.add(state.syncMode === 'HOVER' ? 'active-hover' : 'active-scroll');
+                }
+            }
         }
 
         /********************************************************************
@@ -1044,9 +1108,10 @@
             // Update Segment DOM Highlights
             if (prevIndex !== index || prevMode !== mode) {
                 const allSpans = els.articleContent.querySelectorAll('.srt-segment');
-                allSpans.forEach((span, idx) => {
+                allSpans.forEach((span) => {
                     span.classList.remove('active-scroll', 'active-hover');
-                    if (idx < index) {
+                    const spanIndex = parseInt(span.dataset.index, 10);
+                    if (spanIndex < index) {
                         span.classList.add('read-past');
                     } else {
                         span.classList.remove('read-past');
@@ -1257,6 +1322,65 @@
             }
         }
 
+        /**
+         * Ask the local server for optional sentence-boundary hints. The
+         * request is intentionally non-blocking: the deterministic grouping
+         * is already rendered, and a 404/503 disables further attempts.
+         */
+        async function requestParagraphHints(requestId, segments) {
+            if (state.formatUnavailable || !segments || segments.length === 0) return;
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+            try {
+                const response = await fetch('/api/format', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        video_id: state.videoId,
+                        cues: segments.map(({ index, start, end, text }) => ({
+                            index, start, end, text
+                        }))
+                    }),
+                    signal: controller.signal
+                });
+
+                if (response.status === 404 || response.status === 503) {
+                    state.formatUnavailable = true;
+                    return;
+                }
+                if (!response.ok) return;
+
+                const data = await response.json();
+                if (!data || data.ok === false || requestId !== state.formatRequestId) return;
+
+                const ends = Array.isArray(data.sentence_end_cues)
+                    ? data.sentence_end_cues.map(Number).filter(Number.isInteger)
+                    : [];
+                if (ends.length === 0) return;
+
+                state.sentenceEndCues = new Set(ends);
+
+                // Reflow only while the reader is still at the top. Never move
+                // text under someone who has already started reading.
+                if (els.articleScrollViewport.scrollTop <= 40) {
+                    const scrollTop = els.articleScrollViewport.scrollTop;
+                    renderContinuousArticle(state.segments, state.sentenceEndCues);
+                    els.articleScrollViewport.scrollTop = scrollTop;
+                }
+            } catch (error) {
+                if (!error || error.name !== 'AbortError') {
+                    console.warn('Paragraph sentence hints unavailable:', error);
+                }
+            } finally {
+                clearTimeout(timeoutId);
+            }
+        }
+
         function showVideoEmptyState() {
             els.videoEmptyState.classList.remove('hidden');
         }
@@ -1275,6 +1399,8 @@
             state.hoveredIndex = -1;
             state.lastSeekTarget = -1;
             state.srtSourceVideoId = null;
+            state.sentenceEndCues = null;
+            state.formatRequestId += 1;
 
             els.articleHeadline.textContent = 'No source loaded';
             els.currentTimestampDisplay.textContent = '00:00.000';
@@ -1303,12 +1429,15 @@
             state.segments = parsed;
             state.activeIndex = -1;
             state.lastSeekTarget = -1;
+            state.sentenceEndCues = null;
+            state.formatRequestId += 1;
+            const formatRequestId = state.formatRequestId;
 
             hidePlayerNotice();
             hideVideoEmptyState();
 
             els.articleHeadline.textContent = state.articleTitle;
-            renderContinuousArticle(parsed);
+            renderContinuousArticle(parsed, state.sentenceEndCues);
             els.centerReticle.style.opacity = state.guideVisible ? '1' : '0';
             els.scrollToTopBtn.classList.remove('hidden');
 
@@ -1335,6 +1464,7 @@
             // Update UI + highlight even if the player is still loading
             // (or unavailable, e.g. file:// mode).
             activateSegment(0, 'SCROLL', true);
+            requestParagraphHints(formatRequestId, parsed);
 
             return true;
         }
