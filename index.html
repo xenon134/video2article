@@ -1,0 +1,1528 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Reader — Synchronized Visual Article Engine</title>
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <meta name="theme-color" content="#000000" id="themeColorMeta">
+    <!-- Apply the saved theme before first paint to avoid a flash -->
+    <script>
+        (function () {
+            try {
+                if (localStorage.getItem('vr-theme') === 'light') {
+                    document.documentElement.classList.add('light');
+                    document.documentElement.classList.remove('dark');
+                }
+            } catch (e) { /* storage unavailable */ }
+        })();
+    </script>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter, Instrument Serif, JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        /* Monochrome theme tokens (flip automatically in light mode) */
+                        black: 'rgb(var(--c-page) / <alpha-value>)',
+                        white: 'rgb(var(--c-ink) / <alpha-value>)',
+                        panel: 'rgb(var(--c-panel) / <alpha-value>)',
+                        surface: 'rgb(var(--c-surface) / <alpha-value>)',
+                        wire: 'rgb(var(--c-wire) / <alpha-value>)',
+                        wireLight: 'rgb(var(--c-wire-light) / <alpha-value>)',
+                        muted: 'rgb(var(--c-muted) / <alpha-value>)',
+                        body: 'rgb(var(--c-body) / <alpha-value>)',
+                        faint: 'rgb(var(--c-faint) / <alpha-value>)',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        serif: ['Instrument Serif', 'Georgia', 'serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        /* ==================== THEME TOKENS ==================== */
+        :root {
+            color-scheme: dark;
+            --c-page: 0 0 0;
+            --c-panel: 10 10 10;
+            --c-surface: 20 20 20;
+            --c-wire: 38 38 38;
+            --c-wire-light: 51 51 51;
+            --c-muted: 136 136 136;
+            --c-body: 212 212 212;
+            --c-faint: 82 82 82;
+            --c-ink: 255 255 255;
+            --c-highlight: 31 31 31;
+            --c-highlight-ring: 64 64 64;
+        }
+
+        html.light {
+            color-scheme: light;
+            --c-page: 247 247 245;
+            --c-panel: 255 255 255;
+            --c-surface: 240 240 237;
+            --c-wire: 226 226 222;
+            --c-wire-light: 200 200 195;
+            --c-muted: 107 107 107;
+            --c-body: 63 63 63;
+            --c-faint: 163 163 163;
+            --c-ink: 10 10 10;
+            --c-highlight: 232 232 228;
+            --c-highlight-ring: 185 185 180;
+        }
+
+        /* Custom Stark Minimalist Styling & Scrollbars */
+        * {
+            box-sizing: border-box;
+            selection-background-color: rgb(var(--c-ink));
+            selection-color: rgb(var(--c-page));
+        }
+        ::selection {
+            background: rgb(var(--c-ink));
+            color: rgb(var(--c-page));
+        }
+
+        body {
+            background-color: rgb(var(--c-page));
+            color: rgb(var(--c-ink));
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+            transition: background-color 0.2s ease, color 0.2s ease;
+        }
+
+        /* Custom subtle scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgb(var(--c-panel));
+            border-left: 1px solid rgb(var(--c-wire));
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgb(var(--c-wire-light));
+            border-radius: 9999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgb(var(--c-muted));
+        }
+
+        /* Continuous Prose SRT Segment Styling */
+        .srt-segment {
+            display: inline;
+            padding: 2px 7px;
+            margin: 0 -2px;
+            border-radius: 9999px;
+            transition: background-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+            cursor: crosshair;
+            color: rgb(var(--c-muted));
+            line-height: 1.95;
+            box-decoration-break: clone;
+            -webkit-box-decoration-break: clone;
+        }
+
+        /* Active segment driven by Scroll */
+        .srt-segment.active-scroll {
+            background-color: rgb(var(--c-highlight));
+            color: rgb(var(--c-ink));
+            box-shadow: inset 0 0 0 1px rgb(var(--c-highlight-ring));
+        }
+
+        /* Active segment driven by Pointer Hover (High Contrast Override) */
+        .srt-segment.active-hover {
+            background-color: rgb(var(--c-ink)) !important;
+            color: rgb(var(--c-page)) !important;
+            box-shadow: 0 0 20px rgb(var(--c-ink) / 0.25);
+        }
+
+        /* Already passed segments for subtle reading progress feel */
+        .srt-segment.read-past {
+            color: rgb(var(--c-body));
+        }
+
+        /* Center Reading Reticle Line */
+        .reading-guide-line {
+            pointer-events: none;
+            background: linear-gradient(90deg, rgb(var(--c-ink) / 0.22) 0%, rgb(var(--c-ink) / 0.04) 50%, rgb(var(--c-ink) / 0) 100%);
+        }
+
+        /* Prevent direct clicks on YouTube iframe so it never plays accidentally */
+        .iframe-shield {
+            position: absolute;
+            inset: 0;
+            z-index: 20;
+            cursor: default;
+            background: transparent;
+        }
+
+        /* Subtle technical grid background for video bay */
+        .wireframe-grid-bg {
+            background-size: 24px 24px;
+            background-image: 
+                linear-gradient(to right, rgb(var(--c-wire) / 0.35) 1px, transparent 1px),
+                linear-gradient(to bottom, rgb(var(--c-wire) / 0.35) 1px, transparent 1px);
+        }
+    </style>
+
+</head>
+<body class="h-screen w-screen flex flex-col bg-black text-white select-none">
+
+    <!-- ==================== MAIN SPLIT-PANE WORKSPACE ==================== -->
+    <main class="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
+
+        <!-- LEFT PANE: PAUSED VIDEO VIEWPORT (50% on Desktop, stacked on Mobile) -->
+        <section class="w-full lg:w-1/2 h-[46vh] lg:h-full border-b lg:border-b-0 lg:border-r border-wire bg-black flex flex-col justify-between relative wireframe-grid-bg shrink-0">
+
+            <!-- ==================== VIDEO-SIDE TOP BAR ==================== -->
+            <header class="h-14 shrink-0 border-b border-wire bg-panel flex items-center justify-between gap-2 px-3 sm:px-4 z-30">
+                <h1 class="text-sm font-semibold tracking-widest uppercase whitespace-nowrap">Video Reader</h1>
+
+                <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                    <!-- Theme Switcher -->
+                    <button id="themeToggleBtn" type="button" class="h-8 sm:h-auto w-8 sm:w-auto px-0 sm:px-3 py-1.5 rounded-full border border-wireLight bg-surface hover:bg-white hover:text-black text-[10px] sm:text-xs font-mono tracking-wider uppercase transition-all duration-150 flex items-center justify-center gap-1.5" aria-label="Switch to light theme" title="Switch theme">
+                        <!-- Moon (shown in dark mode) -->
+                        <svg id="themeIconMoon" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                        </svg>
+                        <!-- Sun (shown in light mode) -->
+                        <svg id="themeIconSun" class="w-3.5 h-3.5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                        </svg>
+                        <span id="themeLabel" class="hidden md:inline">DARK</span>
+                    </button>
+
+                    <button id="openSourceModalBtn" class="px-3 sm:px-4 py-1.5 rounded-full bg-white text-black hover:opacity-90 text-[11px] sm:text-xs font-semibold tracking-wide transition-all duration-150 flex items-center gap-1.5">
+                        <span>Load Source</span>
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                        </svg>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Center Video Container -->
+            <div class="flex-1 flex items-center justify-center p-4 lg:p-8 relative overflow-hidden">
+                <div class="w-full max-w-3xl aspect-video bg-panel border border-wireLight relative shadow-2xl overflow-hidden group">
+                    <!-- YouTube IFrame API Target -->
+                    <div id="youtubePlayerContainer" class="w-full h-full pointer-events-none"></div>
+
+                    <!-- Empty state (no source loaded yet) -->
+                    <div id="videoEmptyState" class="absolute inset-0 z-30 bg-panel flex flex-col items-center justify-center text-center p-6 gap-3">
+                        <p class="text-[10px] font-mono uppercase tracking-[0.2em] text-muted">No video loaded</p>
+                        <p class="text-xs text-body max-w-xs leading-relaxed">Load a YouTube video and its .srt transcript to sync frames to your reading position.</p>
+                        <button id="emptyLoadSourceBtn" type="button" class="px-4 py-1.5 rounded-full bg-white text-black hover:opacity-90 text-xs font-semibold tracking-wide transition-opacity">
+                            Load Source
+                        </button>
+                    </div>
+
+                    <!-- Transparent Interaction Shield to guarantee video cannot be unpaused by clicking -->
+                    <div class="iframe-shield" title="Video playback is locked to paused mode. Scroll or hover text on the right to scrub frames."></div>
+
+                    <!-- Active subtitle line over the frame -->
+                    <div id="frameCaptionOverlay" class="hidden absolute bottom-3 left-3 right-3 z-30 pointer-events-none flex justify-center">
+                        <div id="activeFrameQuote" class="px-4 py-1.5 rounded-full bg-black/85 border border-wireLight text-white text-xs font-sans text-center max-w-[90%] truncate opacity-90"></div>
+                    </div>
+
+                    <!-- Player Error / File-Mode Notice Overlay -->
+                    <div id="playerNotice" class="hidden absolute inset-0 z-40 bg-black/95 backdrop-blur-sm flex flex-col items-center justify-center text-center p-3 sm:p-6 gap-1.5 sm:gap-2.5 overflow-y-auto">
+                        <span class="hidden sm:inline-block w-1.5 h-1.5 rounded-full bg-white shrink-0"></span>
+                        <p id="playerNoticeTitle" class="text-[9px] sm:text-[10px] font-mono uppercase tracking-[0.2em] text-white shrink-0">PLAYER UNAVAILABLE</p>
+                        <p id="playerNoticeText" class="text-[10px] sm:text-xs font-sans leading-snug sm:leading-relaxed text-body max-w-md shrink-0">
+                            The video player could not be configured.
+                        </p>
+                        <code id="playerNoticeCommand" class="hidden w-full max-w-full shrink-0 overflow-x-auto whitespace-pre-wrap break-words px-2 sm:px-3 py-1 sm:py-1.5 border border-wire bg-surface text-[9px] sm:text-[10px] font-mono leading-relaxed text-white select-text text-left"></code>
+                        <div class="flex flex-wrap items-center justify-center gap-1 sm:gap-1.5 pt-0.5 shrink-0">
+                            <button id="copyServeCmdBtn" type="button" class="hidden px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-full border border-wireLight bg-surface hover:bg-white hover:text-black text-[9px] sm:text-[10px] font-mono transition-colors">
+                                COPY COMMAND
+                            </button>
+                            <a id="playerNoticeLink" href="#" target="_blank" rel="noopener noreferrer" class="px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-full bg-white text-black hover:opacity-90 text-[9px] sm:text-[10px] font-mono transition-opacity">
+                                OPEN ON YOUTUBE ↗
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Minimal video status + progress bar -->
+            <div class="border-t border-wire bg-panel px-3 sm:px-4 py-3 z-20 flex items-center gap-2.5">
+                <div id="syncModeBadge" class="px-2.5 py-0.5 rounded-full border border-wireLight bg-surface text-[10px] font-mono tracking-wider uppercase flex items-center gap-1.5 transition-colors duration-150 shrink-0">
+                    <span id="syncModeDot" class="w-1.5 h-1.5 rounded-full bg-white"></span>
+                    <span id="syncModeText" class="text-white font-medium">SCROLL</span>
+                </div>
+                <div class="flex-1 h-2 bg-surface border border-wire rounded-full overflow-hidden p-0.5">
+                    <div id="videoTimelineBar" class="h-full bg-white rounded-full transition-all duration-150" style="width: 0%"></div>
+                </div>
+                <span id="currentTimestampDisplay" class="text-[10px] font-mono text-muted whitespace-nowrap shrink-0">00:00.000</span>
+            </div>
+        </section>
+
+        <!-- RIGHT PANE: CONTINUOUS SRT ARTICLE READER -->
+        <section class="w-full lg:w-1/2 flex-1 lg:h-full bg-panel flex flex-col relative overflow-hidden select-text">
+            
+            <!-- Transcript controls -->
+            <div class="h-9 border-b border-wire bg-panel px-3 sm:px-4 flex items-center justify-end gap-1.5 text-[11px] font-mono text-muted z-20 shrink-0 select-none">
+                <button id="toggleGuideBtn" class="px-2.5 py-0.5 rounded-full border border-wireLight bg-surface text-white hover:bg-white hover:text-black text-[10px] transition-colors" title="Toggle center scroll-sync reticle">
+                    GUIDE: ON
+                </button>
+                <button id="fontSizeCycleBtn" class="px-2.5 py-0.5 rounded-full border border-wireLight bg-surface text-white hover:bg-white hover:text-black text-[10px] transition-colors">
+                    TEXT: MD
+                </button>
+            </div>
+
+            <!-- Horizontal Center Scroll-Sync Reticle Indicator -->
+            <div id="centerReticle" class="reading-guide-line absolute left-0 right-0 top-1/2 -translate-y-1/2 h-[1px] z-10"></div>
+
+            <!-- Scrollable Continuous Prose Viewport -->
+            <div id="articleScrollViewport" class="flex-1 overflow-y-auto px-6 sm:px-12 lg:px-16 scroll-smooth relative">
+                <!-- Top Spacer so the very first line can sit at the vertical center of the viewport -->
+                <div class="h-[26vh] lg:h-[42vh] flex flex-col justify-end pb-8 border-b border-wire/60 mb-8 select-none">
+                    <div id="articleMetaRow" class="flex items-center mb-3 hidden">
+                        <span class="hidden px-3 py-0.5 rounded-full border border-wire bg-black text-[10px] font-mono text-muted" id="articleDurationTag"></span>
+                    </div>
+                    <h2 id="articleHeadline" class="font-serif text-3xl sm:text-4xl lg:text-5xl text-white tracking-tight leading-tight">
+                        No source loaded
+                    </h2>
+                    <p class="text-xs font-mono text-muted mt-3">
+                        Scroll to sync the video, or hover any phrase to inspect its frame.
+                    </p>
+                </div>
+
+                <!-- Dynamic Continuous Article Container -->
+                <article id="articleContent" class="max-w-2xl text-base sm:text-lg leading-relaxed space-y-7 font-sans">
+                    <!-- Populated via JavaScript -->
+                </article>
+
+                <!-- Bottom Spacer so the very last line can also reach the vertical center of the viewport -->
+                <div class="h-[32vh] lg:h-[46vh] pt-12 mt-12 border-t border-wire/60 flex items-start justify-end text-[11px] font-mono text-muted select-none">
+                    <button id="scrollToTopBtn" class="px-3.5 py-1 rounded-full border border-wireLight bg-surface text-white hover:bg-white hover:text-black transition-colors">
+                        ↑ RETURN TO TOP
+                    </button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- ==================== INPUT / CONFIGURATION MODAL ==================== -->
+    <div id="sourceModal" class="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+        <div class="w-full max-w-xl bg-panel border border-wireLight shadow-2xl overflow-hidden flex flex-col">
+            <!-- Modal Wireframe Header -->
+            <div class="h-12 border-b border-wire px-6 flex items-center justify-between bg-black">
+                <h3 class="text-xs font-mono uppercase tracking-widest text-white">Load Video &amp; Subtitles</h3>
+                <button id="closeSourceModalBtn" class="px-3 py-1 rounded-full border border-wire hover:border-white text-xs font-mono text-muted hover:text-white transition-colors">
+                    ESC / CLOSE
+                </button>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="p-6 space-y-6 overflow-y-auto max-h-[82vh]">
+                <!-- Error / Status Message Box (No alert() used) -->
+                <div id="modalFeedbackBox" class="hidden px-4 py-2.5 rounded-full border border-white bg-surface text-xs font-mono text-white flex items-center justify-between">
+                    <span id="modalFeedbackText">Status message</span>
+                    <button id="dismissFeedbackBtn" class="text-muted hover:text-white ml-4">✕</button>
+                </div>
+
+                <!-- Step 1: YouTube URL Input -->
+                <div class="space-y-2">
+                    <label for="youtubeUrlInput" class="block text-[11px] font-mono uppercase tracking-wider text-muted">
+                        YouTube URL or video ID
+                    </label>
+                    <div class="flex items-center gap-2">
+                        <input 
+                            id="youtubeUrlInput" 
+                            type="text" 
+                            placeholder="https://www.youtube.com/watch?v=..."
+                            class="flex-1 min-w-0 px-5 py-3 rounded-full bg-black border border-wireLight text-white text-sm font-mono placeholder-faint focus:outline-none focus:border-white transition-colors"
+                        />
+                        <button
+                            id="fetchYouTubeBtn"
+                            type="button"
+                            title="Fetch the video title and English subtitles with yt-dlp"
+                            class="shrink-0 px-4 py-3 rounded-full border border-wireLight bg-surface hover:bg-white hover:text-black text-xs font-mono text-white transition-colors disabled:opacity-50 disabled:cursor-wait"
+                        >
+                            Fetch
+                        </button>
+                    </div>
+                    <p class="text-[11px] font-mono text-muted pl-2">
+                        Watch links, <code class="text-body">youtu.be</code> links, embed URLs, or an 11-character video ID.
+                        Fetch pulls the title and English subtitles automatically.
+                    </p>
+                </div>
+
+                <!-- Step 2: SRT Subtitle File Dropzone or Paste -->
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <label class="block text-[11px] font-mono uppercase tracking-wider text-muted">
+                            Subtitles (.srt file or raw text)
+                        </label>
+                        <span id="loadedFileBadge" class="hidden text-[11px] font-mono text-white bg-surface px-3 py-0.5 rounded-full border border-wire"></span>
+                    </div>
+
+                    <!-- Drag and Drop Zone -->
+                    <div 
+                        id="srtDropZone" 
+                        class="border border-dashed border-wireLight hover:border-white bg-black/60 p-5 text-center transition-colors cursor-pointer flex flex-col items-center justify-center space-y-2"
+                    >
+                        <input id="srtFileInput" type="file" accept=".srt,.txt" class="hidden" />
+                        <div class="px-4 py-1.5 rounded-full border border-wireLight bg-surface text-xs font-medium text-white">
+                            Drop .SRT File Here or Click to Browse
+                        </div>
+                        <span class="text-[11px] font-mono text-muted">
+                            Line breaks inside subtitle blocks will automatically merge into continuous prose
+                        </span>
+                    </div>
+
+                    <!-- Raw SRT Textarea Fallback / Inspector -->
+                    <div class="pt-2">
+                        <textarea 
+                            id="srtRawTextarea" 
+                            rows="6"
+                            placeholder="Or paste raw SubRip (.srt) formatted text directly here..."
+                            class="w-full p-4 bg-black border border-wire text-xs font-mono text-body placeholder-faint focus:outline-none focus:border-white transition-colors resize-none"
+                        ></textarea>
+                    </div>
+                </div>
+
+                <!-- Step 3: Optional Article Headline -->
+                <div class="space-y-2">
+                    <label for="customTitleInput" class="block text-[11px] font-mono uppercase tracking-wider text-muted">
+                        Article title (optional)
+                    </label>
+                    <input 
+                        id="customTitleInput" 
+                        type="text" 
+                        placeholder="e.g., The Architecture of Modern Interfaces"
+                        class="w-full px-5 py-2.5 rounded-full bg-black border border-wire text-white text-sm font-sans placeholder-faint focus:outline-none focus:border-white transition-colors"
+                    />
+                </div>
+            </div>
+
+            <!-- Modal Footer with Pill Actions -->
+            <div class="border-t border-wire bg-black px-6 py-4 flex flex-wrap items-center justify-end gap-3">
+                <div class="flex items-center space-x-2">
+                    <button id="cancelModalBtn" type="button" class="px-4 py-2 rounded-full border border-wire text-xs font-mono text-muted hover:text-white transition-colors">
+                        Cancel
+                    </button>
+                    <button id="applySourceBtn" type="button" class="px-6 py-2 rounded-full bg-white text-black hover:opacity-90 text-xs font-semibold tracking-wide transition-colors disabled:opacity-50 disabled:cursor-wait">
+                        Render Article &amp; Sync Video
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== APPLICATION LOGIC ==================== -->
+    <script>
+        /********************************************************************
+         * 2. APPLICATION STATE
+         ********************************************************************/
+        const state = {
+            videoId: '',
+            articleTitle: '',
+            segments: [],            // Array of { index, start, end, mid, text }
+            totalDuration: 0,
+            activeIndex: -1,
+            syncMode: 'SCROLL',      // 'SCROLL' | 'HOVER'
+            isHovering: false,
+            hoveredIndex: -1,
+            ytPlayer: null,
+            ytReady: false,
+            playerVideoId: '',
+            ytApiRequested: false,
+            playerPrimed: false,     // YouTube ignores seekTo() until playback has started once
+            priming: false,
+            pendingSeekTime: null,
+            lastSeekTimestamp: 0,
+            lastSeekTarget: -1,
+            guideVisible: true,
+            fontSizeStep: 1,          // 0: SM, 1: MD, 2: LG
+            theme: 'dark',            // 'dark' | 'light'
+            srtSourceVideoId: null    // video the current fetched SRT belongs to
+        };
+
+        /********************************************************************
+         * 3. DOM ELEMENT REFERENCES
+         ********************************************************************/
+        const els = {
+            syncModeBadge: document.getElementById('syncModeBadge'),
+            syncModeDot: document.getElementById('syncModeDot'),
+            syncModeText: document.getElementById('syncModeText'),
+            currentTimestampDisplay: document.getElementById('currentTimestampDisplay'),
+            frameCaptionOverlay: document.getElementById('frameCaptionOverlay'),
+            activeFrameQuote: document.getElementById('activeFrameQuote'),
+            videoTimelineBar: document.getElementById('videoTimelineBar'),
+            videoEmptyState: document.getElementById('videoEmptyState'),
+            emptyLoadSourceBtn: document.getElementById('emptyLoadSourceBtn'),
+            articleDurationTag: document.getElementById('articleDurationTag'),
+            articleMetaRow: document.getElementById('articleMetaRow'),
+            articleHeadline: document.getElementById('articleHeadline'),
+            articleContent: document.getElementById('articleContent'),
+            articleScrollViewport: document.getElementById('articleScrollViewport'),
+            centerReticle: document.getElementById('centerReticle'),
+            toggleGuideBtn: document.getElementById('toggleGuideBtn'),
+            fontSizeCycleBtn: document.getElementById('fontSizeCycleBtn'),
+            scrollToTopBtn: document.getElementById('scrollToTopBtn'),
+            // Theme switcher
+            themeToggleBtn: document.getElementById('themeToggleBtn'),
+            themeIconSun: document.getElementById('themeIconSun'),
+            themeIconMoon: document.getElementById('themeIconMoon'),
+            themeLabel: document.getElementById('themeLabel'),
+            themeColorMeta: document.getElementById('themeColorMeta'),
+            // Player notice overlay
+            playerNotice: document.getElementById('playerNotice'),
+            playerNoticeTitle: document.getElementById('playerNoticeTitle'),
+            playerNoticeText: document.getElementById('playerNoticeText'),
+            playerNoticeCommand: document.getElementById('playerNoticeCommand'),
+            playerNoticeLink: document.getElementById('playerNoticeLink'),
+            copyServeCmdBtn: document.getElementById('copyServeCmdBtn'),
+            // Modal elements
+            sourceModal: document.getElementById('sourceModal'),
+            openSourceModalBtn: document.getElementById('openSourceModalBtn'),
+            closeSourceModalBtn: document.getElementById('closeSourceModalBtn'),
+            cancelModalBtn: document.getElementById('cancelModalBtn'),
+            applySourceBtn: document.getElementById('applySourceBtn'),
+            youtubeUrlInput: document.getElementById('youtubeUrlInput'),
+            fetchYouTubeBtn: document.getElementById('fetchYouTubeBtn'),
+            customTitleInput: document.getElementById('customTitleInput'),
+            srtDropZone: document.getElementById('srtDropZone'),
+            srtFileInput: document.getElementById('srtFileInput'),
+            srtRawTextarea: document.getElementById('srtRawTextarea'),
+            loadedFileBadge: document.getElementById('loadedFileBadge'),
+            modalFeedbackBox: document.getElementById('modalFeedbackBox'),
+            modalFeedbackText: document.getElementById('modalFeedbackText'),
+            dismissFeedbackBtn: document.getElementById('dismissFeedbackBtn')
+        };
+
+        /********************************************************************
+         * 3b. THEME SWITCHER
+         ********************************************************************/
+        function applyTheme(theme, persist = false) {
+            const isLight = theme === 'light';
+            state.theme = isLight ? 'light' : 'dark';
+
+            const root = document.documentElement;
+            root.classList.toggle('light', isLight);
+            root.classList.toggle('dark', !isLight);
+
+            // Swap icons + label (dark shows moon, light shows sun)
+            els.themeIconMoon.classList.toggle('hidden', isLight);
+            els.themeIconSun.classList.toggle('hidden', !isLight);
+            els.themeLabel.textContent = isLight ? 'LIGHT' : 'DARK';
+            els.themeToggleBtn.setAttribute('aria-label', isLight ? 'Switch to dark theme' : 'Switch to light theme');
+            els.themeToggleBtn.setAttribute('title', isLight ? 'Switch to dark theme' : 'Switch to light theme');
+
+            if (els.themeColorMeta) {
+                els.themeColorMeta.setAttribute('content', isLight ? '#f7f7f5' : '#000000');
+            }
+
+            if (persist) {
+                try {
+                    localStorage.setItem('vr-theme', state.theme);
+                } catch (e) { /* storage unavailable */ }
+            }
+        }
+
+        function initTheme() {
+            let saved = null;
+            try {
+                saved = localStorage.getItem('vr-theme');
+            } catch (e) { /* storage unavailable */ }
+            applyTheme(saved === 'light' ? 'light' : 'dark');
+        }
+
+        /********************************************************************
+         * 3c. PLAYER NOTICE OVERLAY (ERROR / FILE-MODE HELP)
+         ********************************************************************/
+        function getServeCommand() {
+            let dir = '';
+            try {
+                dir = decodeURIComponent(window.location.pathname || '').replace(/\/[^/]*$/, '');
+            } catch (e) {
+                dir = '';
+            }
+            return `cd "${dir || '.'}" && python3 -m http.server 8000`;
+        }
+
+        function showPlayerNotice({ title, message, showCommand = false, showLink = true }) {
+            els.playerNoticeTitle.textContent = title;
+            els.playerNoticeText.textContent = message;
+            els.playerNoticeLink.href = `https://www.youtube.com/watch?v=${encodeURIComponent(state.videoId)}`;
+            els.playerNoticeLink.classList.toggle('hidden', !showLink);
+
+            if (showCommand) {
+                els.playerNoticeCommand.textContent = getServeCommand();
+                els.playerNoticeCommand.style.display = 'block';
+                els.copyServeCmdBtn.classList.remove('hidden');
+            } else {
+                els.playerNoticeCommand.style.display = 'none';
+                els.copyServeCmdBtn.classList.add('hidden');
+            }
+
+            els.playerNotice.classList.remove('hidden');
+        }
+
+        function hidePlayerNotice() {
+            els.playerNotice.classList.add('hidden');
+        }
+
+        function copyTextToClipboard(text) {
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+            } else {
+                fallbackCopy(text);
+            }
+        }
+
+        function fallbackCopy(text) {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+                document.execCommand('copy');
+            } catch (e) { /* ignore */ }
+            document.body.removeChild(ta);
+        }
+
+        /********************************************************************
+         * 4. UTILITY & PARSING FUNCTIONS (YOUTUBE URL + SRT PARSER)
+         ********************************************************************/
+
+        /**
+         * Extracts an 11-character YouTube Video ID from any common YouTube URL format
+         */
+        function extractYouTubeId(input) {
+            if (!input) return null;
+            const trimmed = input.trim();
+            // Direct 11-char ID check
+            if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
+                return trimmed;
+            }
+            // RegExp covering watch?v=, youtu.be/, embed/, shorts/, v/
+            const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
+            const match = trimmed.match(regex);
+            return match ? match[1] : null;
+        }
+
+        /**
+         * Converts an SRT timestamp string (00:01:23,450 or 00:01:23.450) into seconds (float)
+         */
+        function parseSrtTimeToSeconds(timeString) {
+            if (!timeString) return 0;
+            const clean = timeString.trim().replace(',', '.');
+            const parts = clean.split(':');
+            if (parts.length === 3) {
+                const hours = parseFloat(parts[0]) || 0;
+                const minutes = parseFloat(parts[1]) || 0;
+                const seconds = parseFloat(parts[2]) || 0;
+                return hours * 3600 + minutes * 60 + seconds;
+            } else if (parts.length === 2) {
+                const minutes = parseFloat(parts[0]) || 0;
+                const seconds = parseFloat(parts[1]) || 0;
+                return minutes * 60 + seconds;
+            }
+            return 0;
+        }
+
+        /**
+         * Formats seconds into HH:MM:SS.mmm or MM:SS.mmm technical readout
+         */
+        function formatSecondsToReadout(sec, includeHours = true) {
+            if (isNaN(sec) || sec < 0) sec = 0;
+            const hrs = Math.floor(sec / 3600);
+            const mins = Math.floor((sec % 3600) / 60);
+            const secs = Math.floor(sec % 60);
+            const ms = Math.floor((sec - Math.floor(sec)) * 1000);
+
+            const pad2 = (n) => String(n).padStart(2, '0');
+            const pad3 = (n) => String(n).padStart(3, '0');
+
+            if (includeHours) {
+                return `${pad2(hrs)}:${pad2(mins)}:${pad2(secs)}.${pad3(ms)}`;
+            }
+            return `${pad2(mins)}:${pad2(secs)}.${pad3(ms)}`;
+        }
+
+        /**
+         * Parses raw SRT file content into structured timed segments, stripping
+         * artificial internal line breaks so each segment flows naturally.
+         */
+        function parseSrtContent(rawSrt) {
+            if (!rawSrt || !rawSrt.trim()) return [];
+
+            // Normalize CRLF and remove BOM
+            const normalized = rawSrt.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            const blocks = normalized.trim().split(/\n\s*\n/);
+            const parsedSegments = [];
+
+            const timecodeRegex = /(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}|\d{2}:\d{2}[,.]\d{1,3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}|\d{2}:\d{2}[,.]\d{1,3})/;
+
+            blocks.forEach((block) => {
+                const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+                if (lines.length === 0) return;
+
+                // Locate the line containing the `-->` timecode arrow
+                let timeLineIndex = -1;
+                let timeMatch = null;
+                for (let i = 0; i < lines.length; i++) {
+                    const m = lines[i].match(timecodeRegex);
+                    if (m) {
+                        timeLineIndex = i;
+                        timeMatch = m;
+                        break;
+                    }
+                }
+
+                if (timeLineIndex === -1 || !timeMatch) return;
+
+                const start = parseSrtTimeToSeconds(timeMatch[1]);
+                const end = Math.max(start, parseSrtTimeToSeconds(timeMatch[2]));
+                const mid = Number(((start + end) / 2).toFixed(3));
+
+                // Join all text lines below the timecode with a single space (eliminating SRT line breaks!)
+                const rawTextLines = lines.slice(timeLineIndex + 1);
+                const cleanText = rawTextLines
+                    .join(' ')
+                    .replace(/<[^>]*>/g, '') // Strip HTML tags like <i> or <font> inside SRT
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+                if (cleanText.length > 0) {
+                    parsedSegments.push({
+                        index: parsedSegments.length,
+                        start,
+                        end,
+                        mid,
+                        text: cleanText
+                    });
+                }
+            });
+
+            return parsedSegments;
+        }
+
+        /********************************************************************
+         * 5. CONTINUOUS ARTICLE RENDERER (GROUPING SEGMENTS INTO PROSE)
+         ********************************************************************/
+        function renderContinuousArticle(segments) {
+            els.articleContent.innerHTML = '';
+
+            if (!segments || segments.length === 0) {
+                els.articleContent.innerHTML = `
+                    <p class="text-muted font-mono text-sm">
+                        No transcript loaded. Use “Load Source” to add a YouTube video and an .srt file.
+                    </p>`;
+                els.articleDurationTag.classList.add('hidden');
+                els.articleMetaRow.classList.add('hidden');
+                return;
+            }
+
+            const lastEnd = segments[segments.length - 1].end;
+            state.totalDuration = lastEnd;
+            els.articleDurationTag.textContent = `DURATION ${formatSecondsToReadout(lastEnd, false).split('.')[0]}`;
+            els.articleDurationTag.classList.remove('hidden');
+            els.articleMetaRow.classList.remove('hidden');
+
+            // Group SRT segments into natural flowing paragraphs
+            // A paragraph break is triggered when:
+            // - A segment ends with sentence punctuation (. ? !) AND either:
+            //   a) The current paragraph has accumulated >= 3 segments, OR
+            //   b) There is a pause > 1.5 seconds before the next segment
+            // - Or the paragraph reaches 7 segments
+            const paragraphs = [];
+            let currentPara = [];
+
+            for (let i = 0; i < segments.length; i++) {
+                const seg = segments[i];
+                currentPara.push(seg);
+
+                const nextSeg = segments[i + 1];
+                const endsWithTerminalPunct = /[.?!]["'”’)]?$/.test(seg.text);
+                const silenceGap = nextSeg ? (nextSeg.start - seg.end) : 0;
+
+                const shouldBreakParagraph =
+                    (endsWithTerminalPunct && (currentPara.length >= 3 || silenceGap > 1.5)) ||
+                    currentPara.length >= 7 ||
+                    !nextSeg;
+
+                if (shouldBreakParagraph) {
+                    paragraphs.push(currentPara);
+                    currentPara = [];
+                }
+            }
+
+            // Build DOM Paragraphs with inline .srt-segment spans
+            const fragment = document.createDocumentFragment();
+
+            paragraphs.forEach((paraSegments) => {
+                const p = document.createElement('p');
+                p.className = 'text-body tracking-normal';
+
+                paraSegments.forEach((seg, idx) => {
+                    const span = document.createElement('span');
+                    span.className = 'srt-segment';
+                    span.dataset.index = seg.index;
+                    span.dataset.start = seg.start;
+                    span.dataset.end = seg.end;
+                    span.dataset.mid = seg.mid;
+                    span.textContent = seg.text;
+
+                    // Pointer Hover Listeners for instant Hover Sync Override
+                    span.addEventListener('mouseenter', () => {
+                        handleSegmentHoverEnter(seg.index);
+                    });
+                    span.addEventListener('mouseleave', () => {
+                        handleSegmentHoverLeave(seg.index);
+                    });
+
+                    // Also allow clicking/tapping on mobile/touch devices to lock/scroll segment
+                    span.addEventListener('click', () => {
+                        activateSegment(seg.index, 'HOVER', true);
+                    });
+
+                    p.appendChild(span);
+
+                    // Add a natural space between inline segments so prose flows seamlessly
+                    if (idx < paraSegments.length - 1) {
+                        p.appendChild(document.createTextNode(' '));
+                    }
+                });
+
+                fragment.appendChild(p);
+            });
+
+            els.articleContent.appendChild(fragment);
+        }
+
+        /********************************************************************
+         * 6. YOUTUBE IFRAME API INTEGRATION (ALWAYS PAUSED + SEEK TO MID)
+         ********************************************************************/
+        function loadYouTubeApiScript() {
+            // YouTube error 153 = the embed request carried no HTTP referrer.
+            // That is always the case for file:// pages, so give the user a
+            // clear, actionable notice instead of a broken frame.
+            if (window.location.protocol === 'file:') {
+                showPlayerNotice({
+                    title: 'Embed blocked in file mode · Error 153',
+                    message: 'YouTube can\'t embed from a local file (error 153: no HTTP referrer). Serve this folder over localhost, then reload — the paused-frame player will work normally.',
+                    showCommand: true
+                });
+                return;
+            }
+
+            if (window.YT && window.YT.Player) {
+                initYouTubePlayer();
+                return;
+            }
+            if (state.ytApiRequested) return;
+            state.ytApiRequested = true;
+
+            const tag = document.createElement('script');
+            tag.src = 'https://www.youtube.com/iframe_api';
+            const firstScriptTag = document.getElementsByTagName('script')[0];
+            firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+        }
+
+        // Global callback invoked by YouTube IFrame API
+        window.onYouTubeIframeAPIReady = function () {
+            initYouTubePlayer();
+        };
+
+        function initYouTubePlayer() {
+            if (!state.videoId) return;
+
+            state.playerVideoId = state.videoId;
+            els.videoEmptyState.classList.add('hidden');
+
+            state.ytPlayer = new YT.Player('youtubePlayerContainer', {
+                width: '100%',
+                height: '100%',
+                videoId: state.videoId,
+                playerVars: {
+                    autoplay: 0,
+                    controls: 0,       // Hide player controls
+                    disablekb: 1,      // Disable keyboard shortcuts
+                    fs: 0,             // Hide fullscreen button
+                    iv_load_policy: 3, // Hide video annotations
+                    modestbranding: 1, // Minimal branding
+                    rel: 0,            // Related videos from same channel only
+                    playsinline: 1,
+                    enablejsapi: 1,
+                    // Helps the API validate the embedding page (missing/invalid
+                    // origin or referrer is what triggers error 153).
+                    origin: window.location.origin,
+                    widget_referrer: window.location.href
+                },
+                events: {
+                    onReady: onPlayerReady,
+                    onStateChange: onPlayerStateChange,
+                    onError: onPlayerError
+                }
+            });
+        }
+
+        /**
+         * YouTube silently ignores seekTo() while the player is in the
+         * UNSTARTED (-1) state — which is exactly where it sits if we just
+         * create it, mute it and pause it. A single muted play/pause handshake
+         * moves it into a seekable state, so all subsequent frame scrubbing
+         * works. This is the cause of the "seeking does nothing" bug.
+         */
+        let primeFallbackId = null;
+
+        function schedulePrimeFallback(player) {
+            clearTimeout(primeFallbackId);
+            primeFallbackId = setTimeout(() => {
+                if (state.playerPrimed) return;
+                try {
+                    player.mute();
+                    player.playVideo();
+                } catch (e) { /* player may have been replaced */ }
+            }, 1500);
+        }
+
+        function finishPriming(player) {
+            if (state.playerPrimed) return;
+            // Let the pause settle before issuing the first real seek.
+            setTimeout(() => {
+                if (state.playerPrimed) return;
+                state.playerPrimed = true;
+                state.priming = false;
+                clearTimeout(primeFallbackId);
+
+                if (state.segments.length > 0) {
+                    const idx = state.activeIndex >= 0 ? state.activeIndex : 0;
+                    activateSegment(idx, 'SCROLL', true);
+                }
+            }, 250);
+        }
+
+        function onPlayerReady(event) {
+            state.ytReady = true;
+            hidePlayerNotice();
+            els.videoEmptyState.classList.add('hidden');
+
+            // A new source may have been applied while the API was spinning up.
+            if (state.playerVideoId && state.playerVideoId !== state.videoId) {
+                state.playerVideoId = state.videoId;
+                state.priming = true;
+                state.playerPrimed = false;
+                event.target.mute();
+                event.target.loadVideoById({
+                    videoId: state.videoId,
+                    startSeconds: state.segments[0] ? state.segments[0].mid : 0
+                });
+                schedulePrimeFallback(event.target);
+                return;
+            }
+
+            // Muted play/pause handshake: makes seekTo() work (see above).
+            event.target.mute();
+            state.priming = true;
+            state.playerPrimed = false;
+            event.target.playVideo();
+            schedulePrimeFallback(event.target);
+        }
+
+        function onPlayerStateChange(event) {
+            // YT.PlayerState.PLAYING === 1
+            // Strictly enforce that the video stays paused at all times!
+            if (event.data === YT.PlayerState.PLAYING) {
+                event.target.pauseVideo();
+                if (!state.playerPrimed) finishPriming(event.target);
+            } else if (event.data === YT.PlayerState.PAUSED) {
+                if (state.priming && !state.playerPrimed) finishPriming(event.target);
+            }
+        }
+
+        function onPlayerError(event) {
+            const code = event && event.data;
+
+            if (code === 153) {
+                // Missing HTTP referrer — the same root cause as file:// mode.
+                showPlayerNotice({
+                    title: 'Player configuration error 153',
+                    message: 'YouTube received no valid HTTP referrer for this embed. Serve the page from http://localhost (not a file path) and check that no extension is stripping the Referer header.',
+                    showCommand: true
+                });
+            } else if (code === 101 || code === 150) {
+                showPlayerNotice({
+                    title: 'Embedding disabled by video owner',
+                    message: 'This video does not allow playback in embedded players. Open it directly on YouTube, or load a different video and its SRT file.',
+                    showLink: true
+                });
+            } else if (code === 100) {
+                showPlayerNotice({
+                    title: 'Video not found',
+                    message: 'The requested video is unavailable, private, or has been removed. Double-check the URL or video ID in Load Source.',
+                    showLink: true
+                });
+            } else if (code === 2) {
+                showPlayerNotice({
+                    title: 'Invalid player parameter',
+                    message: 'The video ID or player configuration was rejected by YouTube. Verify the URL in Load Source.',
+                    showLink: true
+                });
+            } else {
+                showPlayerNotice({
+                    title: 'Player unavailable',
+                    message: `YouTube returned player error ${code !== undefined ? code : 'unknown'}. Try reloading, or open the video directly on YouTube.`,
+                    showLink: true
+                });
+            }
+        }
+
+        /**
+         * Programmatically seeks the paused YouTube player to `seconds` (midpoint of segment)
+         * Includes subtle throttling so rapid scrolling remains buttery smooth.
+         */
+        let seekTimeoutId = null;
+
+        function seekPausedVideoTo(seconds, forceImmediate = false) {
+            const targetSec = Math.max(0, Number(seconds.toFixed(2)));
+            if (Math.abs(state.lastSeekTarget - targetSec) < 0.05 && !forceImmediate) {
+                return;
+            }
+
+            const executeSeek = () => {
+                state.lastSeekTarget = targetSec;
+                state.lastSeekTimestamp = performance.now();
+
+                if (state.ytReady && state.ytPlayer && typeof state.ytPlayer.seekTo === 'function') {
+                    try {
+                        state.ytPlayer.seekTo(targetSec, true);
+                        state.ytPlayer.pauseVideo();
+                    } catch (err) {
+                        // Safe catch if iframe is mid-reload
+                    }
+                }
+            };
+
+            const now = performance.now();
+            const elapsed = now - state.lastSeekTimestamp;
+
+            if (forceImmediate || elapsed > 110) {
+                clearTimeout(seekTimeoutId);
+                executeSeek();
+            } else {
+                clearTimeout(seekTimeoutId);
+                seekTimeoutId = setTimeout(executeSeek, 110 - elapsed);
+            }
+        }
+
+        /********************************************************************
+         * 7. SCROLL & HOVER SYNCHRONIZATION ENGINE
+         ********************************************************************/
+
+        /**
+         * Activates a specific segment index, updates UI telemetry, highlights prose,
+         * and seeks the paused video to the segment's exact midpoint.
+         */
+        function activateSegment(index, mode = 'SCROLL', forceImmediateSeek = false) {
+            if (index < 0 || index >= state.segments.length) return;
+
+            const seg = state.segments[index];
+            const prevIndex = state.activeIndex;
+            const prevMode = state.syncMode;
+
+            state.activeIndex = index;
+            state.syncMode = mode;
+
+            // Update Segment DOM Highlights
+            if (prevIndex !== index || prevMode !== mode) {
+                const allSpans = els.articleContent.querySelectorAll('.srt-segment');
+                allSpans.forEach((span, idx) => {
+                    span.classList.remove('active-scroll', 'active-hover');
+                    if (idx < index) {
+                        span.classList.add('read-past');
+                    } else {
+                        span.classList.remove('read-past');
+                    }
+                });
+
+                const activeSpan = els.articleContent.querySelector(`.srt-segment[data-index="${index}"]`);
+                if (activeSpan) {
+                    if (mode === 'HOVER') {
+                        activeSpan.classList.add('active-hover');
+                    } else {
+                        activeSpan.classList.add('active-scroll');
+                    }
+                }
+            }
+
+            // Update timestamp, caption and progress
+            els.currentTimestampDisplay.textContent = formatSecondsToReadout(seg.mid, false);
+            els.activeFrameQuote.textContent = seg.text;
+            els.frameCaptionOverlay.classList.remove('hidden');
+
+            // Update Timeline Progress Bar
+            const progressPct = state.totalDuration > 0 ? Math.min(100, (seg.mid / state.totalDuration) * 100) : 0;
+            els.videoTimelineBar.style.width = `${progressPct.toFixed(1)}%`;
+
+            // Update Mode Pill Styling (SCROLL vs HOVER)
+            if (mode === 'HOVER') {
+                els.syncModeText.textContent = 'HOVER';
+                els.syncModeBadge.className = 'px-2.5 py-0.5 rounded-full border border-white bg-white text-black text-[10px] font-mono tracking-wider uppercase flex items-center gap-1.5 transition-colors duration-150';
+                els.syncModeDot.className = 'w-1.5 h-1.5 rounded-full bg-black';
+                els.syncModeText.className = 'text-black font-semibold';
+            } else {
+                els.syncModeText.textContent = 'SCROLL';
+                els.syncModeBadge.className = 'px-2.5 py-0.5 rounded-full border border-wireLight bg-surface text-white text-[10px] font-mono tracking-wider uppercase flex items-center gap-1.5 transition-colors duration-150';
+                els.syncModeDot.className = 'w-1.5 h-1.5 rounded-full bg-white';
+                els.syncModeText.className = 'text-white font-medium';
+            }
+
+            // Seek Paused Video to Segment Midpoint: (start + end) / 2
+            seekPausedVideoTo(seg.mid, forceImmediateSeek);
+        }
+
+        /**
+         * Pointer Hover Handlers
+         */
+        function handleSegmentHoverEnter(index) {
+            state.isHovering = true;
+            state.hoveredIndex = index;
+            activateSegment(index, 'HOVER', true);
+        }
+
+        function handleSegmentHoverLeave() {
+            state.isHovering = false;
+            state.hoveredIndex = -1;
+            // Revert gracefully back to whatever segment is at the scroll center
+            detectCenterScrolledSegment();
+        }
+
+        /**
+         * Calculates which `.srt-segment` span is closest to the vertical center
+         * of the right-hand reading pane (`articleScrollViewport`).
+         */
+        function detectCenterScrolledSegment() {
+            // If user is actively hovering a specific phrase, hover takes priority
+            if (state.isHovering && state.hoveredIndex !== -1) {
+                return;
+            }
+
+            const viewportRect = els.articleScrollViewport.getBoundingClientRect();
+            const targetCenterY = viewportRect.top + viewportRect.height / 2;
+
+            const spans = els.articleContent.querySelectorAll('.srt-segment');
+            if (spans.length === 0) return;
+
+            let closestIndex = 0;
+            let smallestDistance = Infinity;
+
+            spans.forEach((span) => {
+                const rects = span.getClientRects();
+                const idx = parseInt(span.dataset.index, 10);
+
+                for (let i = 0; i < rects.length; i++) {
+                    const r = rects[i];
+                    // If the vertical center line passes directly inside this line box
+                    if (targetCenterY >= r.top && targetCenterY <= r.bottom) {
+                        const horizCenterDist = Math.abs((r.top + r.bottom) / 2 - targetCenterY);
+                        if (horizCenterDist < smallestDistance) {
+                            smallestDistance = horizCenterDist;
+                            closestIndex = idx;
+                        }
+                    } else {
+                        const dist = Math.min(
+                            Math.abs(r.top - targetCenterY),
+                            Math.abs(r.bottom - targetCenterY)
+                        );
+                        if (dist < smallestDistance) {
+                            smallestDistance = dist;
+                            closestIndex = idx;
+                        }
+                    }
+                }
+            });
+
+            activateSegment(closestIndex, 'SCROLL', false);
+        }
+
+        /********************************************************************
+         * 8. UI CONTROLS, MODAL & DRAG-AND-DROP SRT HANDLERS
+         ********************************************************************/
+        function showModalFeedback(message) {
+            els.modalFeedbackText.textContent = message;
+            els.modalFeedbackBox.classList.remove('hidden');
+        }
+
+        function hideModalFeedback() {
+            els.modalFeedbackBox.classList.add('hidden');
+        }
+
+        function openSourceModal() {
+            hideModalFeedback();
+            els.youtubeUrlInput.value = state.videoId
+                ? `https://www.youtube.com/watch?v=${state.videoId}`
+                : '';
+            els.customTitleInput.value = state.articleTitle;
+            els.sourceModal.classList.remove('hidden');
+        }
+
+        function closeSourceModal() {
+            els.sourceModal.classList.add('hidden');
+        }
+
+        const YOUTUBE_FETCH_TIMEOUT_MS = 90000;
+
+        function setYouTubeFetchBusy(busy) {
+            els.fetchYouTubeBtn.disabled = busy;
+            els.applySourceBtn.disabled = busy;
+            els.fetchYouTubeBtn.textContent = busy ? 'FETCHING…' : 'Fetch';
+        }
+
+        async function fetchYouTubeSource() {
+            const videoId = extractYouTubeId(els.youtubeUrlInput.value);
+            if (!videoId) {
+                showModalFeedback('ERROR: Enter a valid YouTube URL or 11-character video ID.');
+                return null;
+            }
+
+            setYouTubeFetchBusy(true);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), YOUTUBE_FETCH_TIMEOUT_MS);
+
+            try {
+                const response = await fetch(
+                    `/api/youtube?url=${encodeURIComponent(videoId)}&lang=en`,
+                    {
+                        headers: { Accept: 'application/json' },
+                        signal: controller.signal
+                    }
+                );
+
+                let data = null;
+                try {
+                    data = await response.json();
+                } catch (parseError) {
+                    data = null;
+                }
+
+                if (!response.ok || !data || data.ok === false) {
+                    if (response.status === 404) {
+                        showModalFeedback('ERROR: /api/youtube was not found. Restart the local server with: python3 server.py');
+                    } else {
+                        showModalFeedback(`ERROR: ${(data && data.error) || `Fetch failed (HTTP ${response.status}).`}`);
+                    }
+                    return null;
+                }
+
+                const currentTitle = els.customTitleInput.value.trim();
+                if (data.title && (!currentTitle || currentTitle === state.articleTitle)) {
+                    els.customTitleInput.value = data.title;
+                }
+
+                if (data.subtitle) {
+                    els.srtRawTextarea.value = data.subtitle;
+                    state.srtSourceVideoId = videoId;
+                    els.loadedFileBadge.textContent = `${data.auto ? 'AUTO' : 'SUBS'} · ${data.language || 'en'}`;
+                    els.loadedFileBadge.classList.remove('hidden');
+                    showModalFeedback(
+                        `${data.cached ? 'Loaded from cache' : 'Fetched'}: “${data.title}” — ` +
+                        `${data.language || 'subtitle'} ${data.auto ? 'auto-captions' : 'subtitles'}.`
+                    );
+                } else {
+                    els.srtRawTextarea.value = '';
+                    state.srtSourceVideoId = null;
+                    els.loadedFileBadge.classList.add('hidden');
+                    showModalFeedback(`Fetched “${data.title}”, but no subtitles were found. Paste an .srt file to continue.`);
+                }
+
+                return data;
+            } catch (error) {
+                if (error && error.name === 'AbortError') {
+                    showModalFeedback('ERROR: The YouTube fetch timed out. Try again.');
+                } else {
+                    showModalFeedback(`ERROR: Could not reach the local server. Is server.py running? (${error.message})`);
+                }
+                return null;
+            } finally {
+                clearTimeout(timeoutId);
+                setYouTubeFetchBusy(false);
+            }
+        }
+
+        function showVideoEmptyState() {
+            els.videoEmptyState.classList.remove('hidden');
+        }
+
+        function hideVideoEmptyState() {
+            els.videoEmptyState.classList.add('hidden');
+        }
+
+        function resetWorkspace() {
+            state.videoId = '';
+            state.articleTitle = '';
+            state.segments = [];
+            state.totalDuration = 0;
+            state.activeIndex = -1;
+            state.isHovering = false;
+            state.hoveredIndex = -1;
+            state.lastSeekTarget = -1;
+            state.srtSourceVideoId = null;
+
+            els.articleHeadline.textContent = 'No source loaded';
+            els.currentTimestampDisplay.textContent = '00:00.000';
+            els.videoTimelineBar.style.width = '0%';
+            els.activeFrameQuote.textContent = '';
+            els.frameCaptionOverlay.classList.add('hidden');
+            els.articleScrollViewport.scrollTop = 0;
+            els.centerReticle.style.opacity = '0';
+            els.scrollToTopBtn.classList.add('hidden');
+
+            renderContinuousArticle([]);
+            hidePlayerNotice();
+            showVideoEmptyState();
+        }
+
+        function loadPresetIntoWorkspace(videoId, title, rawSrt) {
+            const parsed = parseSrtContent(rawSrt);
+            if (parsed.length === 0) {
+                showModalFeedback('ERROR: Could not parse valid SRT blocks. Check timecode format (00:00:00,000 --> 00:00:04,000).');
+                return false;
+            }
+
+            const videoChanged = state.videoId !== videoId;
+            state.videoId = videoId;
+            state.articleTitle = title || 'Synchronized Video Transcript';
+            state.segments = parsed;
+            state.activeIndex = -1;
+            state.lastSeekTarget = -1;
+
+            hidePlayerNotice();
+            hideVideoEmptyState();
+
+            els.articleHeadline.textContent = state.articleTitle;
+            renderContinuousArticle(parsed);
+            els.centerReticle.style.opacity = state.guideVisible ? '1' : '0';
+            els.scrollToTopBtn.classList.remove('hidden');
+
+            // Reset scroll position to top
+            els.articleScrollViewport.scrollTop = 0;
+
+            if (!state.ytPlayer) {
+                // First source: create the player lazily.
+                loadYouTubeApiScript();
+            } else if (state.ytReady && videoChanged) {
+                // New video on an existing player: reload it and re-prime so
+                // YouTube honours seekTo() again.
+                state.playerPrimed = false;
+                state.priming = true;
+                state.playerVideoId = state.videoId;
+                state.ytPlayer.mute();
+                state.ytPlayer.loadVideoById({
+                    videoId: state.videoId,
+                    startSeconds: parsed[0].mid
+                });
+                schedulePrimeFallback(state.ytPlayer);
+            }
+
+            // Update UI + highlight even if the player is still loading
+            // (or unavailable, e.g. file:// mode).
+            activateSegment(0, 'SCROLL', true);
+
+            return true;
+        }
+
+        // File reader helper for .srt upload or drag-and-drop
+        function handleSrtFileSelection(file) {
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const content = e.target.result;
+                els.srtRawTextarea.value = content;
+                state.srtSourceVideoId = null;
+                els.loadedFileBadge.textContent = file.name;
+                els.loadedFileBadge.classList.remove('hidden');
+                // Auto-populate title from filename if custom title is blank
+                if (!els.customTitleInput.value.trim()) {
+                    els.customTitleInput.value = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]+/g, ' ');
+                }
+                hideModalFeedback();
+            };
+            reader.onerror = () => {
+                showModalFeedback('ERROR: Failed to read local .srt file.');
+            };
+            reader.readAsText(file);
+        }
+
+        function bindEventListeners() {
+            // Theme switcher (persists to localStorage)
+            els.themeToggleBtn.addEventListener('click', () => {
+                applyTheme(state.theme === 'light' ? 'dark' : 'light', true);
+            });
+
+            // Copy local-server command shown in the player notice
+            els.copyServeCmdBtn.addEventListener('click', () => {
+                copyTextToClipboard(els.playerNoticeCommand.textContent);
+                const original = els.copyServeCmdBtn.textContent;
+                els.copyServeCmdBtn.textContent = 'COPIED ✓';
+                setTimeout(() => {
+                    els.copyServeCmdBtn.textContent = original;
+                }, 1400);
+            });
+
+            // Scroll Listener on Right Article Pane (with requestAnimationFrame)
+            let scrollTicking = false;
+            els.articleScrollViewport.addEventListener('scroll', () => {
+                if (!scrollTicking) {
+                    window.requestAnimationFrame(() => {
+                        detectCenterScrolledSegment();
+                        scrollTicking = false;
+                    });
+                    scrollTicking = true;
+                }
+            }, { passive: true });
+
+            // Toggle Center Sync Axis Reticle Guide
+            els.toggleGuideBtn.addEventListener('click', () => {
+                state.guideVisible = !state.guideVisible;
+                els.centerReticle.style.opacity = state.guideVisible ? '1' : '0';
+                els.toggleGuideBtn.textContent = state.guideVisible ? 'GUIDE: ON' : 'GUIDE: OFF';
+            });
+
+            // Cycle Typography Scale
+            const sizeClasses = [
+                'max-w-2xl text-sm sm:text-base leading-relaxed space-y-6 font-sans',
+                'max-w-2xl text-base sm:text-lg leading-relaxed space-y-7 font-sans',
+                'max-w-3xl text-lg sm:text-xl leading-loose space-y-8 font-sans'
+            ];
+            const sizeLabels = ['TEXT: SM', 'TEXT: MD', 'TEXT: LG'];
+
+            els.fontSizeCycleBtn.addEventListener('click', () => {
+                state.fontSizeStep = (state.fontSizeStep + 1) % 3;
+                els.articleContent.className = sizeClasses[state.fontSizeStep];
+                els.fontSizeCycleBtn.textContent = sizeLabels[state.fontSizeStep];
+                detectCenterScrolledSegment();
+            });
+
+            // Scroll to top button
+            els.scrollToTopBtn.addEventListener('click', () => {
+                els.articleScrollViewport.scrollTo({ top: 0, behavior: 'smooth' });
+            });
+
+            // Modal Open / Close
+            els.openSourceModalBtn.addEventListener('click', openSourceModal);
+            els.emptyLoadSourceBtn.addEventListener('click', openSourceModal);
+            els.closeSourceModalBtn.addEventListener('click', closeSourceModal);
+            els.cancelModalBtn.addEventListener('click', closeSourceModal);
+            els.dismissFeedbackBtn.addEventListener('click', hideModalFeedback);
+
+            // Escape key closes modal
+            window.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && !els.sourceModal.classList.contains('hidden')) {
+                    closeSourceModal();
+                }
+            });
+
+            // Drag & Drop SRT Zone
+            els.srtDropZone.addEventListener('click', () => {
+                els.srtFileInput.click();
+            });
+
+            els.srtFileInput.addEventListener('change', (e) => {
+                if (e.target.files && e.target.files[0]) {
+                    handleSrtFileSelection(e.target.files[0]);
+                }
+            });
+
+            // Editing the textarea makes it a manual transcript, independent of
+            // whichever video last auto-fetched subtitles.
+            els.srtRawTextarea.addEventListener('input', () => {
+                state.srtSourceVideoId = null;
+                els.loadedFileBadge.classList.add('hidden');
+            });
+
+            els.srtDropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                els.srtDropZone.classList.add('border-white', 'bg-surface');
+            });
+
+            els.srtDropZone.addEventListener('dragleave', () => {
+                els.srtDropZone.classList.remove('border-white', 'bg-surface');
+            });
+
+            els.srtDropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                els.srtDropZone.classList.remove('border-white', 'bg-surface');
+                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                    handleSrtFileSelection(e.dataTransfer.files[0]);
+                }
+            });
+
+            // Also support dragging an .srt file anywhere onto the window
+            window.addEventListener('dragover', (e) => e.preventDefault());
+            window.addEventListener('drop', (e) => {
+                e.preventDefault();
+                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                    const droppedFile = e.dataTransfer.files[0];
+                    if (droppedFile.name.toLowerCase().endsWith('.srt') || droppedFile.name.toLowerCase().endsWith('.txt')) {
+                        openSourceModal();
+                        handleSrtFileSelection(droppedFile);
+                    }
+                }
+            });
+
+            // Fetch title + subtitles from the local yt-dlp endpoint
+            els.fetchYouTubeBtn.addEventListener('click', () => {
+                fetchYouTubeSource();
+            });
+
+            // Apply Source Button in Modal
+            els.applySourceBtn.addEventListener('click', async () => {
+                const rawUrl = els.youtubeUrlInput.value;
+                const extractedId = extractYouTubeId(rawUrl);
+                if (!extractedId) {
+                    showModalFeedback('INVALID YOUTUBE URL: Please enter a valid YouTube watch link, youtu.be URL, or 11-character Video ID.');
+                    return;
+                }
+
+                let rawSrt = els.srtRawTextarea.value.trim();
+                if (rawSrt && state.srtSourceVideoId && state.srtSourceVideoId !== extractedId) {
+                    // The textarea still holds subtitles fetched for a different
+                    // video; fetch the right track instead of mixing them up.
+                    rawSrt = '';
+                }
+                if (!rawSrt) {
+                    // No SRT supplied: try yt-dlp first, so pasting just the URL is enough.
+                    const fetched = await fetchYouTubeSource();
+                    if (!fetched || !fetched.subtitle) {
+                        return;
+                    }
+                    rawSrt = fetched.subtitle;
+                }
+
+                const customTitle = els.customTitleInput.value.trim() || `Video Article // ${extractedId}`;
+                const success = loadPresetIntoWorkspace(extractedId, customTitle, rawSrt);
+                if (success) {
+                    closeSourceModal();
+                }
+            });
+        }
+
+        /********************************************************************
+         * 9. BOOTSTRAP APPLICATION ON LOAD
+         ********************************************************************/
+        window.addEventListener('DOMContentLoaded', () => {
+            initTheme();
+            bindEventListeners();
+            resetWorkspace();
+        });
+    </script>
+</body>
+</html>
