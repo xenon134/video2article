@@ -7,13 +7,16 @@ styling, SRT parsing, and playback logic.
 ## Run
 
 ```bash
-python3 server.py
+./run.sh
 ```
 
-Open <http://localhost:8000/>. Use `--port` if 8000 is occupied:
+`run.sh` uses `.venv/bin/python` when a local virtualenv exists (needed for
+the optional punctuation model) and falls back to `python3` otherwise. You can
+also run `python3 server.py` directly. Open <http://localhost:8000/>. Use
+`--port` if 8000 is occupied:
 
 ```bash
-python3 server.py --port 8001
+./run.sh --port 8001
 ```
 
 Do not use `python3 -m http.server` for the full app. The plain static server
