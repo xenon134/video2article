@@ -572,6 +572,8 @@ def _clean_sentence_ends(values: Any, cue_count: int) -> list[int]:
         return []
     clean: set[int] = set()
     for value in values:
+        if isinstance(value, dict):
+            value = value.get("index", value.get("cue_index"))
         try:
             index = int(value)
         except (TypeError, ValueError):
@@ -590,6 +592,8 @@ def _clean_paragraphs(values: Any, cue_count: int) -> list[list[int]] | None:
             continue
         group: list[int] = []
         for value in paragraph:
+            if isinstance(value, dict):
+                value = value.get("index", value.get("cue_index"))
             try:
                 index = int(value)
             except (TypeError, ValueError):
@@ -637,10 +641,12 @@ def format_transcript_cues(cues: list[dict[str, Any]], refresh: bool = False) ->
         if not isinstance(result, dict):
             raise RuntimeError("formatter returned a non-object result")
 
-        sentence_end_cues = _clean_sentence_ends(
-            result.get("sentence_end_cues", result.get("breaks")), len(cues)
-        )
-        paragraphs = _clean_paragraphs(result.get("paragraphs"), len(cues))
+        raw_ends = result.get("sentence_end_cues")
+        if raw_ends is None:
+            raw_ends = result.get("sentence_end_indices", result.get("breaks"))
+        sentence_end_cues = _clean_sentence_ends(raw_ends, len(cues))
+        raw_paragraphs = result.get("paragraphs", result.get("groups"))
+        paragraphs = _clean_paragraphs(raw_paragraphs, len(cues))
         data: dict[str, Any] = {
             "version": FORMAT_CACHE_VERSION,
             "cues_hash": digest,
