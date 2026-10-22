@@ -1,0 +1,3 @@
+# Base server dependency. The optional punctuation formatter has a separate
+# requirements file under tools/.
+yt-dlp>=2025.1.1
