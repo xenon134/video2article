@@ -60,6 +60,22 @@ GET /health
 text or `null`), `language`, `auto`, `cached`, `duration`, and `subtitle_file`.
 A video without captions still returns the title and `subtitle: null`.
 
+```text
+POST /api/format
+Content-Type: application/json
+
+{"cues":[{"index":0,"start":1.5,"end":3.7,"text":"hello there"}]}
+```
+
+`/api/format` is an optional model-backed helper. It returns
+`sentence_end_cues` (cue indices where a sentence ends) and, when available,
+`paragraphs` (arrays of cue indices). The client uses the hints with its own
+grouping rules; transcript words are not rewritten. Results are cached under
+`cache/format/`. If the optional formatter or its Python dependencies are not
+installed, the endpoint returns `503` and the client keeps its deterministic
+grouping. See `tools/NOTES.md` and `tools/requirements-punctuation.txt` for
+the model setup.
+
 ## Tests
 
 ```bash
