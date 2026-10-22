@@ -13,7 +13,9 @@ reads the cache instead of hitting YouTube again.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
+import importlib.util
 import json
 import os
 import re
@@ -36,10 +38,16 @@ except ImportError:  # pragma: no cover - startup guard
 ROOT = Path(__file__).resolve().parent
 CACHE_DIR = ROOT / "cache"
 CACHE_VERSION = 1
+FORMAT_CACHE_VERSION = 1
 
 # yt-dlp is network-bound; serializing fetches keeps duplicate requests from
 # hammering YouTube and racing on the same cache files.
 YDL_LOCK = threading.Lock()
+FORMAT_LOCK = threading.Lock()
+FORMATTER_LOAD_LOCK = threading.Lock()
+_FORMATTER = None
+_FORMATTER_LOADED = False
+_FORMATTER_LOAD_ERROR: str | None = None
 
 VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 SAFE_LANG_RE = re.compile(r"[^A-Za-z0-9_-]+")
@@ -495,6 +503,162 @@ def friendly_error(exc: BaseException) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Optional punctuation/sentence-boundary formatter
+# ---------------------------------------------------------------------------
+
+class PunctuationFormatterUnavailable(RuntimeError):
+    """Raised when the optional model tooling is not installed."""
+
+
+def _formatter_path() -> Path:
+    return ROOT / "tools" / "punctuation_format.py"
+
+
+def _load_formatter():
+    """Lazily import tools/punctuation_format.py so the base server has no
+    hard dependency on onnxruntime/transformers."""
+    global _FORMATTER, _FORMATTER_LOADED, _FORMATTER_LOAD_ERROR
+
+    if _FORMATTER_LOADED:
+        if _FORMATTER is None:
+            raise PunctuationFormatterUnavailable(_FORMATTER_LOAD_ERROR or "Punctuation formatter is unavailable.")
+        return _FORMATTER
+
+    with FORMATTER_LOAD_LOCK:
+        if _FORMATTER_LOADED:
+            if _FORMATTER is None:
+                raise PunctuationFormatterUnavailable(_FORMATTER_LOAD_ERROR or "Punctuation formatter is unavailable.")
+            return _FORMATTER
+
+        path = _formatter_path()
+        if not path.is_file():
+            _FORMATTER_LOADED = True
+            _FORMATTER_LOAD_ERROR = (
+                "Punctuation formatter is not installed. Add tools/punctuation_format.py "
+                "and install tools/requirements-punctuation.txt."
+            )
+            raise PunctuationFormatterUnavailable(_FORMATTER_LOAD_ERROR)
+
+        try:
+            spec = importlib.util.spec_from_file_location("video_reader_punctuation_format", path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"could not load {path}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            formatter = getattr(module, "format_cues", None) or getattr(module, "format_transcript", None)
+            if not callable(formatter):
+                raise RuntimeError("module does not export format_cues(cues)")
+        except Exception as exc:  # dependency or model load failure
+            _FORMATTER_LOADED = True
+            _FORMATTER_LOAD_ERROR = f"Punctuation formatter failed to load: {exc}"
+            raise PunctuationFormatterUnavailable(_FORMATTER_LOAD_ERROR) from exc
+
+        _FORMATTER = formatter
+        _FORMATTER_LOADED = True
+        _FORMATTER_LOAD_ERROR = None
+        print(f"[format] loaded {path}", flush=True)
+        return _FORMATTER
+
+
+def _format_cache_path(cues: list[dict[str, Any]]) -> tuple[Path, str]:
+    canonical = json.dumps(cues, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
+    return CACHE_DIR / "format" / f"{digest}.json", digest
+
+
+def _clean_sentence_ends(values: Any, cue_count: int) -> list[int]:
+    if not isinstance(values, (list, tuple, set)):
+        return []
+    clean: set[int] = set()
+    for value in values:
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= index < cue_count:
+            clean.add(index)
+    return sorted(clean)
+
+
+def _clean_paragraphs(values: Any, cue_count: int) -> list[list[int]] | None:
+    if not isinstance(values, (list, tuple)):
+        return None
+    paragraphs: list[list[int]] = []
+    for paragraph in values:
+        if not isinstance(paragraph, (list, tuple)):
+            continue
+        group: list[int] = []
+        for value in paragraph:
+            try:
+                index = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < cue_count:
+                group.append(index)
+        if group:
+            paragraphs.append(group)
+    return paragraphs or None
+
+
+def format_transcript_cues(cues: list[dict[str, Any]], refresh: bool = False) -> dict[str, Any]:
+    """Return sentence-end cue indices (and optional paragraph groups).
+
+    Results are cached by a hash of the cue list, so repeated loads of the same
+    transcript do not rerun the model.  The formatter contract is documented in
+    tools/NOTES.md.
+    """
+    cache_path, digest = _format_cache_path(cues)
+
+    def read_cache() -> dict[str, Any] | None:
+        if refresh or not cache_path.is_file():
+            return None
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if data.get("version") != FORMAT_CACHE_VERSION or data.get("cues_hash") != digest:
+            return None
+        data["cached"] = True
+        return data
+
+    cached = read_cache()
+    if cached is not None:
+        return cached
+
+    formatter = _load_formatter()
+
+    with FORMAT_LOCK:
+        cached = read_cache()
+        if cached is not None:
+            return cached
+
+        result = formatter(cues)
+        if not isinstance(result, dict):
+            raise RuntimeError("formatter returned a non-object result")
+
+        sentence_end_cues = _clean_sentence_ends(
+            result.get("sentence_end_cues", result.get("breaks")), len(cues)
+        )
+        paragraphs = _clean_paragraphs(result.get("paragraphs"), len(cues))
+        data: dict[str, Any] = {
+            "version": FORMAT_CACHE_VERSION,
+            "cues_hash": digest,
+            "engine": str(result.get("engine") or "punctuation-model"),
+            "sentence_end_cues": sentence_end_cues,
+            "paragraphs": paragraphs,
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "cached": False,
+        }
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache_path.with_suffix(cache_path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, cache_path)
+        return data
+
+
+# ---------------------------------------------------------------------------
 # HTTP server
 # ---------------------------------------------------------------------------
 
@@ -504,7 +668,7 @@ class VideoReaderHandler(SimpleHTTPRequestHandler):
     def do_OPTIONS(self):  # noqa: N802 (http.server naming)
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -523,6 +687,15 @@ class VideoReaderHandler(SimpleHTTPRequestHandler):
             return
 
         super().do_GET()
+
+    def do_POST(self):  # noqa: N802
+        path = urllib.parse.urlparse(self.path).path
+
+        if path == "/api/format":
+            self._handle_format_api()
+            return
+
+        self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
     def list_directory(self, path):  # noqa: N802
         # Never expose directory listings (especially not ./cache).
@@ -554,6 +727,101 @@ class VideoReaderHandler(SimpleHTTPRequestHandler):
             print(f"[api] {video_id}: {type(exc).__name__}: {exc}", flush=True)
             self._send_json(
                 {"ok": False, "error": friendly_error(exc)},
+                HTTPStatus.BAD_GATEWAY,
+            )
+            return
+
+        self._send_json({"ok": True, **data}, HTTPStatus.OK)
+
+    def _handle_format_api(self):
+        try:
+            length = int(self.headers.get("Content-Length") or "0")
+        except ValueError:
+            length = 0
+
+        if length <= 0:
+            self._send_json(
+                {"ok": False, "error": "POST a JSON body with a non-empty cues array."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if length > 4_000_000:
+            self._send_json(
+                {"ok": False, "error": "Transcript is too large (max 4 MB)."},
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            )
+            return
+
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            self._send_json(
+                {"ok": False, "error": "Request body must be valid JSON."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        if not isinstance(payload, dict):
+            self._send_json(
+                {"ok": False, "error": "Request body must be a JSON object."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        raw_cues = payload.get("cues")
+        if not isinstance(raw_cues, list) or not raw_cues:
+            self._send_json(
+                {"ok": False, "error": "cues must be a non-empty array."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if len(raw_cues) > 5000:
+            self._send_json(
+                {"ok": False, "error": "Too many cues (max 5000)."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        cues: list[dict[str, Any]] = []
+        for position, cue in enumerate(raw_cues):
+            if not isinstance(cue, dict):
+                continue
+            text = str(cue.get("text") or "").strip()
+            if not text:
+                continue
+            try:
+                start = max(0.0, float(cue.get("start") or 0))
+                end = max(start, float(cue.get("end") or start))
+            except (TypeError, ValueError):
+                continue
+            try:
+                index = int(cue.get("index", position))
+            except (TypeError, ValueError):
+                index = position
+            cues.append({
+                "index": index,
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "text": text[:2000],
+            })
+
+        if not cues:
+            self._send_json(
+                {"ok": False, "error": "No usable cues were supplied."},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        refresh = payload.get("refresh") in (True, 1, "1", "true", "yes")
+        try:
+            data = format_transcript_cues(cues, refresh=refresh)
+        except PunctuationFormatterUnavailable as exc:
+            self._send_json({"ok": False, "error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        except Exception as exc:
+            print(f"[format] failed: {type(exc).__name__}: {exc}", flush=True)
+            self._send_json(
+                {"ok": False, "error": f"Punctuation formatting failed: {str(exc)[:400]}"},
                 HTTPStatus.BAD_GATEWAY,
             )
             return

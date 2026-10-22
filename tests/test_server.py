@@ -188,6 +188,67 @@ class CacheTests(unittest.TestCase):
         self.assertIsNone(server._read_cache("dQw4w9WgXcQ", "en", refresh=False))
 
 
+class FormatCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.cache_dir = self.root / "cache"
+        self.root_patch = mock.patch.object(server, "ROOT", self.root)
+        self.cache_patch = mock.patch.object(server, "CACHE_DIR", self.cache_dir)
+        self.root_patch.start()
+        self.cache_patch.start()
+        self.addCleanup(self.root_patch.stop)
+        self.addCleanup(self.cache_patch.stop)
+        self.addCleanup(self._reset_formatter)
+        self._reset_formatter()
+
+    @staticmethod
+    def _reset_formatter():
+        server._FORMATTER = None
+        server._FORMATTER_LOADED = False
+        server._FORMATTER_LOAD_ERROR = None
+
+    def _write_fake_formatter(self, source: str):
+        tools = self.root / "tools"
+        tools.mkdir(parents=True, exist_ok=True)
+        (tools / "punctuation_format.py").write_text(source, encoding="utf-8")
+
+    def test_formatter_result_is_normalized_and_cached(self):
+        self._write_fake_formatter(
+            "def format_cues(cues):\n"
+            "    return {\n"
+            "        'engine': 'fake-model',\n"
+            "        'sentence_end_cues': [0, 1, 99, '2'],\n"
+            "        'paragraphs': [[0, 1], [2, 99]],\n"
+            "    }\n"
+        )
+        cues = [
+            {"index": 0, "start": 0, "end": 1, "text": "one"},
+            {"index": 1, "start": 1, "end": 2, "text": "two"},
+            {"index": 2, "start": 2, "end": 3, "text": "three"},
+        ]
+
+        result = server.format_transcript_cues(cues)
+        self.assertEqual(result["engine"], "fake-model")
+        self.assertEqual(result["sentence_end_cues"], [0, 1, 2])
+        self.assertEqual(result["paragraphs"], [[0, 1], [2]])
+        self.assertFalse(result["cached"])
+
+        cached = server.format_transcript_cues(cues)
+        self.assertTrue(cached["cached"])
+        self.assertEqual(cached["sentence_end_cues"], [0, 1, 2])
+
+        cache_files = list((self.cache_dir / "format").glob("*.json"))
+        self.assertEqual(len(cache_files), 1)
+
+    def test_missing_formatter_is_reported(self):
+        with self.assertRaises(server.PunctuationFormatterUnavailable):
+            server.format_transcript_cues(
+                [{"index": 0, "start": 0, "end": 1, "text": "one"}]
+            )
+
+
 class ErrorMessageTests(unittest.TestCase):
     def test_strips_ansi_and_error_prefix(self):
         message = server.friendly_error(Exception("\x1b[31mERROR: something broke\x1b[0m"))
