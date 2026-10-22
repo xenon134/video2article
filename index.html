@@ -1328,6 +1328,7 @@
          * is already rendered, and a 404/503 disables further attempts.
          */
         async function requestParagraphHints(requestId, segments) {
+            if (window.location.protocol === 'file:') return;
             if (state.formatUnavailable || !segments || segments.length === 0) return;
 
             const controller = new AbortController();
