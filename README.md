@@ -1,8 +1,9 @@
 # Video Reader
 
-A single-file YouTube transcript reader. The video stays paused; scrolling or
-hovering a transcript cue seeks to that cue. `index.html` contains all UI,
-styling, SRT parsing, and playback logic.
+A local YouTube transcript reader. The video stays paused; scrolling or
+hovering a transcript cue seeks to that cue. `index.html` contains the UI,
+styling, SRT parsing, and playback logic; `tools/grouping.js` provides the
+sentence-aware paragraph grouper.
 
 ## Run
 
@@ -52,6 +53,23 @@ http://localhost:8000/api/youtube?url=<video-id>&lang=en&refresh=1
 `cache/` is gitignored. The server refuses to serve directory listings or
 files under `/cache/`; use the API instead.
 
+## Paragraph grouping
+
+`tools/grouping.js` groups cues into paragraphs using sentence punctuation,
+speaker/turn markers, pauses, duration, cue count, and character caps. It
+returns the original cue objects, so cue indices, timing, hover seeking, and
+scroll sync are unchanged. If the module is unavailable, the reader falls back
+to its older fixed-size rule.
+
+The optional `/api/format` response can add sentence-end hints. Hints only
+reflow the article while the reader is still at the top; if you have already
+scrolled, the current layout is kept so text does not move under you.
+
+On the bundled fixtures, the grouper reduces `test.srt` from 57 to 39
+paragraphs and the manual-subtitle fixture from 123 to 68 paragraphs, with no
+mid-sentence breaks in the manual track. See `tools/GROUPING_NOTES.md` for the
+rules, defaults, and caveats.
+
 ## API
 
 ```text
@@ -83,4 +101,10 @@ the model setup.
 
 ```bash
 python3 -m unittest discover -s tests -v
+node tools/grouping_edge_test.mjs
+node tools/grouping_test.mjs test.srt cache/M7lc1UVf-VE.en.srt
 ```
+
+The browser path can be smoke-tested by opening the reader, loading
+`test.srt`, and checking paragraph reflow, scroll/hover seeking, and both
+themes. The app itself has no telemetry or demo data.
